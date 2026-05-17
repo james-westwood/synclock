@@ -1,0 +1,142 @@
+{
+  "project": "mixxx-midi-clock-rs",
+  "description": "Headless Rust daemon that bridges Mixxx BPM/beat_distance MIDI output to MIDI clock (24 PPQN) for the Novation Circuit Rhythm, running as a systemd user service.",
+  "quality_checks": [
+    "cargo check --all-targets 2>&1",
+    "cargo test 2>&1",
+    "cargo clippy --all-targets -- -D warnings 2>&1"
+  ],
+  "tasks": [
+    {
+      "id": "TASK-01",
+      "epic": "Foundation",
+      "title": "scaffold_and_list_ports",
+      "owner": "ralph",
+      "description": "Create the Rust project at ~/scripts/mixxx_scripts/mixxx-midi-clock-rs/ using cargo init. Cargo.toml dependencies: midir = \"0.9\", spin_sleep = \"1\", clap = { version = \"4\", features = [\"derive\", \"env\"] }, crossbeam-channel = \"0.5\", tracing = \"0.1\", tracing-subscriber = { version = \"0.3\", features = [\"env-filter\"] }, anyhow = \"1\". Create the module structure: src/main.rs (entry point, CLI, logging init), src/config.rs (Config struct, clap derive, defaults), src/input.rs (stub), src/clock.rs (stub), src/output.rs (stub), src/state.rs (PlayState, ClockState enums), src/ports.rs (stub). Implement --list-ports: enumerate all ALSA MIDI input and output ports via midir, print port names and indices, then exit. This subcommand must work without any hardware connected (just lists available ports). Implement --fallback-bpm (default 120.0), --input-port (env: MIXXX_MIDI_CLOCK_INPUT_PORT), --output-port (env: MIXXX_MIDI_CLOCK_OUTPUT_PORT), --phase-gain (default 0.15) CLI flags. Add a README.md with build instructions and --list-ports usage.",
+      "acceptance_criteria": "cargo check passes; cargo test passes (even if only dummy tests); running target with --list-ports prints MIDI port names and exits 0; running target with --help shows all CLI flags including env var defaults",
+      "completed": false,
+      "priority": 1
+    },
+    {
+      "id": "TASK-02",
+      "epic": "Input",
+      "title": "mixxx_midi_input_decoder",
+      "owner": "ralph",
+      "description": "Implement src/input.rs: MixxxMidiInput struct that opens an ALSA MIDI input port (by substring match or index via --input-port) and decodes the Mixxx controller protocol on channel 11 (index 10). The decoder must handle three MIDI message types based on status byte: (1) Pitch Bend 0xEA: data1 = bpmWhole (actual BPM = data1 + 60), data2 = bpmFractional (BPM fraction = data2 / 100.0), yielding bpm = (data1 + 60.0) + (data2 as f64 / 100.0). Clamp BPM to [30.0, 300.0]. (2) Note On 0x9A on note 0x77: data2 = velocity representing beat_distance. IMPORTANT: the velocity encodes how far into the beat we ALREADY are, but the Arduino reference inverts it with (1 - velocity/127.0). Use the same inversion: beat_distance = 1.0 - (data2 as f64 / 127.0). This value represents the fraction of the current beat elapsed. (3) Note Off 0x8A on note 0x77: indicates Mixxx stopped or no sync leader — emit a Stopped event. Send decoded events through a crossbeam_channel::Sender<InputEvent> where InputEvent is an enum in src/state.rs with variants: BpmUpdate { bpm: f64 }, BeatDistance { value: f64 }, Playing, Stopped. The input thread should log each decoded message at trace level. Implement input watchdog: if no message received for 5 seconds, log a warning and emit Stopped (allows clock to coast at last BPM).",
+      "acceptance_criteria": "Unit tests in src/input.rs: decode_pitch_bend_message_returns_correct_bpm; decode_pitch_bend_clamps_to_30_300; decode_note_on_returns_inverted_beat_distance (velocity 0 → beat_distance 1.0, velocity 127 → beat_distance ~0.0, velocity 64 → beat_distance ~0.496); decode_note_off_returns_stopped_event; watchdog_emits_stopped_after_5s_timeout; cargo test passes",
+      "completed": false,
+      "priority": 2
+    },
+    {
+      "id": "TASK-03",
+      "epic": "Core",
+      "title": "fixed_bpm_clock_loop",
+      "owner": "ralph",
+      "description": "Implement src/clock.rs: ClockEngine struct that runs a high-precision 24 PPQN clock loop on a dedicated thread. The loop: (1) Compute tick interval: tick_interval_ns = (60_000_000_000 / (bpm * 24.0)) as u64. (2) Use spin_sleep::sleep(ns) to wait between pulses — this uses busy-wait for the final ~100µs for precision. (3) On each tick, send an OutputCommand::ClockPulse through a crossbeam_channel. (4) Track pulse_count (1..=24, wraps at 24). (5) On pulse_count == 24 (beat boundary), check for phase correction input from the input thread. ClockEngine receives InputEvent via a crossbeam_channel::Receiver and updates internal BPM. For now (fixed BPM), use the --fallback-bpm value as the constant tempo. The clock thread should set real-time priority where possible: try libc::sched_setscheduler with SCHED_FIFO, fall back gracefully if not available (log warning). Add a --dry-run flag to Config: in dry-run mode, the clock thread logs each pulse at trace level but does NOT send output commands. This is critical for development without hardware.",
+      "acceptance_criteria": "Unit tests: tick_interval_ns computes correctly for 120 BPM (20_833_333ns), 160 BPM (15_625_000ns), 60 BPM (41_666_666ns); pulse_count wraps from 24 to 1; dry_run_mode_logs_pulses_without_sending; cargo test passes; cargo clippy no warnings",
+      "completed": false,
+      "priority": 2
+    },
+    {
+      "id": "TASK-04",
+      "epic": "Core",
+      "title": "bpm_tracking_and_smoothing",
+      "owner": "ralph",
+      "description": "Extend ClockEngine in src/clock.rs to track BPM updates from InputEvent::BpmUpdate. When a BpmUpdate arrives, only apply it if the absolute difference from current BPM exceeds 0.05 (smoothing dead-band). This prevents micro-jitter from Mixxx's 320ms update interval causing audible clock wobble. Log BPM changes at info level. When BPM changes, immediately recompute tick_interval_ns for the next pulse (do NOT wait for beat boundary — tempo changes take effect immediately). If no BpmUpdate received for 3 seconds after initial sync, log a warning but continue at last-known BPM (coasting behavior).",
+      "acceptance_criteria": "Unit tests: bpm_update_applied_when_delta_exceeds_0_05; bpm_update_ignored_when_delta_below_0_05; bpm_change_recomputes_tick_interval_immediately; coasting_continues_at_last_bpm_after_timeout; cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "TASK-05",
+      "epic": "Core",
+      "title": "play_stop_state_machine",
+      "owner": "ralph",
+      "description": "Implement the state machine in src/state.rs with states: Idle, WaitingForBeat, Running, Stopped. Transitions: Idle → WaitingForBeat (on InputEvent::Playing with a valid BpmUpdate), WaitingForBeat → Running (on beat boundary after initial phase sleep — see TASK-07), Running → Stopped (on InputEvent::Stopped), Stopped → WaitingForBeat (on next InputEvent::Playing). In Running state, send OutputCommand::ClockPulse on every tick. In Stopped state, send OutputCommand::Stop. On transition from Stopped/Idle → WaitingForBeat, ALWAYS send OutputCommand::Start (0xFA), never Continue (0xFB). This matches the plan's intent since Mixxx doesn't have its own pause/resume concept — when Mixxx starts playing, Circuit Rhythm should always start from beat 1. On transition to Stopped, send OutputCommand::Stop (0xFC). Add the state machine to the ClockEngine thread: it processes InputEvent messages between clock ticks (non-blocking try_recv) and updates PlayState accordingly.",
+      "acceptance_criteria": "Unit tests: idle_receives_playing_transitions_to_waiting; waiting_receives_beat_transitions_to_running_sends_start; running_receives_stopped_transitions_to_stopped_sends_stop; stopped_receives_playing_transitions_to_waiting_sends_start_not_continue; state_machine_never_sends_continue_0xFB; cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "TASK-06",
+      "epic": "Core",
+      "title": "initial_phase_sync",
+      "owner": "ralph",
+      "description": "Implement initial phase sync in src/clock.rs: when transitioning from Stopped/Idle to WaitingForBeat, the clock must delay the first 0xFA (Start) until the right moment so that beat 1 aligns with Mixxx's beat 1. Algorithm: on receiving the first Playing + BeatDistance after stop: (1) Compute sleep_until_beat_boundary_ns = (1.0 - beat_distance) * beat_duration_ns. (2) Sleep for that duration using spin_sleep. (3) Send OutputCommand::Start (0xFA). (4) Immediately start the 24 PPQN clock loop starting at pulse 0/24. This ensures the first clock pulse arrives immediately after Start, and Circuit Rhythm's beat 1 aligns with Mixxx's next beat. Log the phase sync at debug level (sleep duration, beat_distance received). If beat_distance > 0.95 (very close to next beat already), skip the sleep and start immediately to avoid missing the beat entirely.",
+      "acceptance_criteria": "Unit tests: phase_sync_sleep_computed_correctly_for_half_beat; phase_sync_skips_sleep_when_beat_distance_above_0_95; start_command_sent_after_phase_sleep; first_clock_pulse_starts_at_pulse_0_after_start; cargo test passes",
+      "completed": false,
+      "priority": 4
+    },
+    {
+      "id": "TASK-07",
+      "epic": "Core",
+      "title": "phase_correction_drift",
+      "owner": "ralph",
+      "owner": "ralph",
+      "description": "Implement continuous phase correction in src/clock.rs: on every 24th pulse (beat boundary, pulse_count == 24), apply phase correction using the latest beat_distance from Mixxx. Algorithm: (1) Compute staleness: time_since_last_mixxx_msg / beat_duration_ns. (2) Adjusted beat distance: (beat_distance + staleness) % 1.0. (3) Phase error: ((adjusted_beat_distance - expected_beat_distance) + 0.5) % 1.0 - 0.5 — this wraps correctly for circular phase. (4) Correction: phase_error × beat_duration_ns × gain (configurable, default 0.15), capped at 5% of beat_duration_ns. (5) Nudge next_tick deadline by correction — never hard-jump. CRITICAL: The phase error MUST use modular arithmetic clamped to [-0.5, 0.5] to prevent violent overshoot when beat_distance wraps from ~1.0 to ~0.0. This is the highest-risk implementation detail. The correction is added to the next tick deadline (shifted forward if phase is ahead, backward if behind). Log phase corrections at debug level (error value, correction nanoseconds).",
+      "acceptance_criteria": "Unit tests: phase_error_wraps_correctly_at_boundary (beat_distance 0.99 → 0.01 should give small error, not ~1.0); correction_capped_at_5_percent_of_beat_duration; staleness_adjusted_beat_distance_computed_correctly; zero_phase_error_produces_zero_correction; gain_of_0_15_produces_15_percent_of_error_as_correction; negative_phase_error_delays_next_tick; cargo test passes",
+      "completed": false,
+      "priority": 4
+    },
+    {
+      "id": "TASK-08",
+      "epic": "Output",
+      "title": "circuit_rhythm_output",
+      "owner": "ralph",
+      "description": "Implement src/output.rs: CircuitRhythmOutput struct that opens an ALSA MIDI output port (by substring match or index via --output-port) and sends MIDI clock and transport messages. Handle OutputCommand enum: ClockPulse (send 0xF8), Start (send 0xFA), Stop (send 0xFC), Continue (send 0xFB). Run on a dedicated thread receiving from crossbeam_channel::Receiver<OutputCommand>. Auto-discovery: search for ports containing 'Focusrite-Novation' or 'Circuit Rhythm' in the name. If auto-discovery fails, log available ports and suggest --output-port flag. Send MIDI bytes directly via midir::MidiOutputConnection::send. Log each transport message (Start/Stop/Continue) at info level; log clock pulses only at trace level. In --dry-run mode, log all output commands but do NOT actually send MIDI bytes.",
+      "acceptance_criteria": "Unit tests: clock_pulse_sends_0xF8; start_sends_0xFA; stop_sends_0xFC; continue_sends_0xFB; auto_discovery_matches_circuit_rhythm_port; dry_run_logs_without_sending; cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "TASK-09",
+      "epic": "Resilience",
+      "title": "reconnection_watchdog",
+      "owner": "ralph",
+      "description": "Implement reconnection watchdog in src/ports.rs: (1) Output watchdog: every 2 seconds, if midir send fails (returns Err), log error, drop the current connection, re-enumerate ports, and attempt reconnect. On output reconnect while clock is in Running state, send OutputCommand::Start (0xFA) to resync Circuit Rhythm. (2) Input watchdog: every 2 seconds, check if the input port is still connected. If Mixxx closes (port disappears), log warning, emit InputEvent::Stopped to coast at last-known BPM. When Mixxx restarts (port reappears), reconnect and begin receiving messages again — the state machine will pick up Playing events and resync. Both watchdogs should use exponential backoff on repeated failures (1s, 2s, 4s, 8s, max 30s) to avoid spamming logs on persistent disconnect. Log reconnection attempts at info level, persistent failures at warn level.",
+      "acceptance_criteria": "Unit tests: output_failure_triggers_reconnect_attempt; input_disappear_emits_stopped; input_reappear_reconnects; exponential_backoff_increases_on_repeated_failures; max_backoff_capped_at_30s; reconnect_while_running_sends_start; cargo test passes",
+      "completed": false,
+      "priority": 5
+    },
+    {
+      "id": "TASK-10",
+      "epic": "Integration",
+      "title": "systemd_service_and_install",
+      "owner": "ralph",
+      "description": "Create systemd/ directory with mixxx-midi-clock.service user unit file. Configuration: Type=simple, ExecStart=%h/.local/bin/mixxx-midi-clock, After=pipewire.service sound.target, Restart=on-failure, RestartSec=3s, Environment=RUST_LOG=info, StandardOutput=journal, StandardError=journal, SyslogIdentifier=mixxx-midi-clock, LimitRTPRIO=50, AmbientCapabilities=CAP_SYS_NICE. Add an ExecStopPost that runs the binary with --stop flag (send 0xFC on shutdown). Create install.sh script that: (1) runs cargo build --release, (2) copies binary to ~/.local/bin/mixxx-midi-clock, (3) copies systemd unit to ~/.config/systemd/user/, (4) runs systemctl --user daemon-reload, (5) runs systemctl --user enable --now mixxx-midi-clock. Add a --stop CLI flag that connects to the output port, sends 0xFC, and exits (for graceful shutdown). Log instructions for monitoring: journalctl --user -u mixxx-midi-clock -f.",
+      "acceptance_criteria": "systemd unit file has correct ExecStart, ExecStopPost, and capabilities; install.sh builds release binary and installs to ~/.local/bin; install.sh enables and starts the service; --stop flag sends 0xFC and exits; systemctl --user status shows active after install; cargo test passes",
+      "completed": false,
+      "priority": 6
+    },
+    {
+      "id": "TASK-11",
+      "epic": "Polish",
+      "title": "observability_and_readme",
+      "owner": "ralph",
+      "description": "Add structured logging throughout: use tracing with spans for clock cycle timing. Log at info level: startup (ports connected, bpm, mode), state transitions (Idle→WaitingForBeat→Running→Stopped), BPM changes, MIDI transport messages sent (Start/Stop), reconnection events. Log at debug level: phase corrections (error, correction_ns), tick interval changes, staleness values. Log at trace level: individual clock pulses, raw MIDI bytes received. Add a --status flag that prints current state (PlayState, BPM, phase_error, port names) and exits — implemented by connecting to a Unix domain socket at /run/user/{uid}/mixxx-midi-clock.sock. The daemon creates this socket on startup and writes JSON status every second. --status reads the latest status and prints it. Update README.md with: project overview, build instructions (cargo build --release), installation (./install.sh), usage (--list-ports, --status, --dry-run, --fallback-bpm, --input-port, --output-port, --phase-gain), systemd management commands, troubleshooting section.",
+      "acceptance_criteria": "tracing spans present in clock loop; info-level logs show state transitions; --status flag outputs JSON with current BPM, PlayState, phase_error, port info; README.md has complete usage documentation; cargo clippy no warnings; cargo test passes",
+      "completed": false,
+      "priority": 7
+    },
+    {
+      "id": "TASK-H1",
+      "epic": "Foundation",
+      "title": "verify_midi_port_names",
+      "owner": "human",
+      "description": "Run the built binary with --list-ports on Muddlehead while Mixxx is running and Circuit Rhythm is connected via USB. Record the exact ALSA port name strings for: (1) The Mixxx MIDI clock output port (should contain 'mixxx_midi_clock' but verify exact name). (2) The Circuit Rhythm input port (should contain 'Circuit Rhythm' or 'Focusrite-Novation' but verify exact name). These exact strings are needed to confirm auto-discovery logic works correctly.",
+      "acceptance_criteria": "Exact port name strings for Mixxx output and Circuit Rhythm input recorded in README.md or config comments",
+      "completed": false,
+      "priority": 2
+    },
+    {
+      "id": "TASK-H2",
+      "epic": "Integration",
+      "title": "hardware_acceptance_test",
+      "owner": "human",
+      "description": "After all ralph tasks are complete, run the daemon with Circuit Rhythm connected and Mixxx playing. Verify: (1) Circuit Rhythm display shows correct BPM matching Mixxx. (2) Beat 1 aligns within 3 bars of pressing play in Mixxx. (3) Stopping Mixxx sends 0xFC and Circuit Rhythm stops. (4) Restarting Mixxx sends 0xFA and Circuit Rhythm restarts in sync. (5) No audible drift after 10 minutes. (6) Disconnecting and reconnecting Circuit Rhythm USB re-syncs within 4 seconds. Record results in a test notes file.",
+      "acceptance_criteria": "All 9 acceptance criteria from the plan verified on real hardware; results documented",
+      "completed": false,
+      "priority": 8
+    }
+  ]
+}
