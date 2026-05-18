@@ -8,11 +8,11 @@ use std::path::PathBuf;
     version
 )]
 pub struct Config {
-    /// Substring or index of ALSA MIDI input port (Mixxx output)
+    /// Case-insensitive substring of ALSA MIDI port name (e.g. 'mixxx_midi_clock'). Use --list-ports to see available ports.
     #[arg(long, env = "MIXXX_MIDI_CLOCK_INPUT_PORT")]
     pub input_port: Option<String>,
 
-    /// Substring or index of ALSA MIDI output port (Circuit Rhythm input)
+    /// Case-insensitive substring of ALSA MIDI port name (e.g. 'Circuit Rhythm'). Use --list-ports to see available ports.
     #[arg(long, env = "MIXXX_MIDI_CLOCK_OUTPUT_PORT")]
     pub output_port: Option<String>,
 

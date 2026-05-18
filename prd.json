@@ -138,6 +138,106 @@
       "acceptance_criteria": "All 9 acceptance criteria from the plan verified on real hardware; results documented",
       "completed": false,
       "priority": 8
+    },
+    {
+      "id": "FIX-01",
+      "epic": "Input",
+      "title": "fix_beat_distance_inversion",
+      "owner": "ralph",
+      "description": "Fix beat distance decoding in src/input.rs:98. The current code incorrectly inverts the value: `let beat_distance = 1.0 - (data2 as f64 / 127.0);`. The Mixxx JS script sends `Math.round(beatDistance * 127)` as velocity, where beatDistance is Mixxx's beat_distance control (0.0 = on the beat, 1.0 = just before the next beat). The correct decode is `let beat_distance = data2 as f64 / 127.0;` — no inversion. With the current inversion, initial phase sync sleeps for the wrong duration: when Mixxx is at beat_distance=0.0 (just hit the beat), the daemon starts immediately instead of waiting a full beat, and vice versa. Also update the test `decode_note_on_returns_inverted_beat_distance` in src/input.rs to reflect the correct (non-inverted) semantics: rename it `decode_note_on_returns_beat_distance` and update assertions: velocity 0 → beat_distance 0.0, velocity 127 → beat_distance ~1.0, velocity 64 → beat_distance ~0.504. Note: TASK-02's original description incorrectly specified the inversion — this fix overrides that instruction.",
+      "acceptance_criteria": "src/input.rs: beat_distance decoding uses `data2 as f64 / 127.0` with no inversion; test `decode_note_on_returns_beat_distance` asserts velocity 0 → 0.0, velocity 127 → ~1.0, velocity 64 → ~0.504; cargo test passes; cargo clippy no warnings",
+      "completed": false,
+      "priority": 2
+    },
+    {
+      "id": "FIX-02",
+      "epic": "Core",
+      "title": "fix_start_before_phase_sync",
+      "owner": "ralph",
+      "description": "Fix ordering of OutputCommand::Start and initial_phase_sync in src/clock.rs `transition_to_waiting`. Current code (wrong order): `self.send_output(OutputCommand::Start); self.initial_phase_sync(); self.transition_to_running();`. This sends 0xFA immediately, then sleeps up to ~500ms before the first 0xF8 arrives. The Circuit Rhythm starts its sequencer on 0xFA and counts time with no clock pulses for up to 500ms, then receives a burst — this defeats the purpose of phase sync. Correct order: `self.initial_phase_sync(); self.send_output(OutputCommand::Start); self.transition_to_running();`. This way 0xFA and the first 0xF8 arrive in tight sequence (within one tick interval, ~20ms at 120 BPM). No other changes needed.",
+      "acceptance_criteria": "src/clock.rs `transition_to_waiting`: `initial_phase_sync()` is called before `send_output(OutputCommand::Start)`; cargo test passes; cargo check passes",
+      "completed": false,
+      "priority": 2
+    },
+    {
+      "id": "FIX-03",
+      "epic": "Integration",
+      "title": "fix_ctrlc_sigterm",
+      "owner": "ralph",
+      "description": "Fix Cargo.toml so that ctrlc catches SIGTERM in addition to SIGINT. Current: `ctrlc = \"3\"`. Without the `termination` feature, ctrlc only catches SIGINT on Linux, not SIGTERM. Systemd sends SIGTERM on `systemctl stop`, so the daemon hangs until TimeoutStopSec expires and the graceful 0xFC Stop is never sent to the Circuit Rhythm. Fix: change to `ctrlc = { version = \"3\", features = [\"termination\"] }` in Cargo.toml. No other changes needed.",
+      "acceptance_criteria": "Cargo.toml has `ctrlc = { version = \"3\", features = [\"termination\"] }`; cargo check passes; cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "FIX-04",
+      "epic": "Integration",
+      "title": "fix_thread_shutdown_propagation",
+      "owner": "ralph",
+      "description": "Fix graceful shutdown: the `running` Arc<AtomicBool> is currently only observed by ClockEngine. The input thread (MixxxMidiInput::run in src/input.rs) runs an infinite watchdog loop and never checks `running`, so main() hangs on its join. The output thread (CircuitRhythmOutput::run in src/output.rs) blocks on `command_rx.recv()` indefinitely after the clock engine exits, so its join also hangs. Fix both: (1) In src/input.rs: add `running: Arc<AtomicBool>` field to MixxxMidiInput, pass it through `new()` and `spawn()`. In the watchdog loop, replace `loop {` with `while self.running.load(Ordering::Relaxed) {`. Update MixxxMidiInput::new call in src/main.rs to pass `running.clone()`. (2) In src/output.rs: the output thread blocks on `command_rx.recv()`. When the clock engine shuts down it drops `output_tx`, which closes the channel — `recv()` will then return `Err(Disconnected)` and the loop exits naturally via `while let Ok(cmd) = self.command_rx.recv()`. No change needed to output.rs if it already uses `while let Ok`. Verify output.rs loop exits cleanly when channel is closed. (3) In src/main.rs: verify that after `running.store(false)` in the ctrlc handler, the clock engine thread exits and drops `output_tx`, which unblocks the output thread. The input thread will exit on the next watchdog iteration (within 100ms). No join timeout is needed if the above is correct.",
+      "acceptance_criteria": "MixxxMidiInput accepts `running: Arc<AtomicBool>` and exits its loop when running is false; output thread exits when output_tx is dropped (channel closes); main() does not hang after SIGINT; cargo check passes; cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "FIX-05",
+      "epic": "Core",
+      "title": "fix_phase_correction_pulse_doubling",
+      "owner": "ralph",
+      "description": "Fix phase correction in src/clock.rs `apply_phase_correction` to prevent back-to-back 0xF8 pulses. Current code caps correction at 5% of beat_duration_ns. At 120 BPM: beat_duration = 500ms, 5% = 25ms. But one tick interval = 20.8ms. So a 25ms correction can push `next_tick` more than one tick into the past, causing the next `run_clock_tick` to fire immediately (no sleep) AND the tick after that to also fire immediately — two pulses in rapid succession. Fix: additionally cap the correction so it cannot push `next_tick` past `Instant::now()`. After computing `capped_correction`, before applying it to `next_tick`, check: if the resulting `next_tick` would be in the past, clamp it to `Instant::now() + Duration::from_nanos(1)`. Alternatively, cap correction to `min(5% of beat, tick_interval_ns - 1)`. The second approach is cleaner. Change the max_correction calculation to: `let max_correction = (beat_duration_ns * 0.05).min(self.tick_interval_ns as f64 - 1.0);`",
+      "acceptance_criteria": "src/clock.rs `apply_phase_correction`: max_correction is capped to the minimum of 5% of beat_duration and (tick_interval_ns - 1); unit test `correction_cannot_push_next_tick_into_past` verifies that after correction, next_tick is always >= Instant::now(); cargo test passes",
+      "completed": false,
+      "priority": 3
+    },
+    {
+      "id": "FIX-06",
+      "epic": "Output",
+      "title": "fix_dry_run_port_connection",
+      "owner": "ralph",
+      "description": "Fix --dry-run mode in src/output.rs. Currently the output thread performs full MIDI port discovery and attempts to connect even in dry-run mode, making it unusable on machines without the Circuit Rhythm connected. Fix: in `CircuitRhythmOutput::run()`, add an early return path before port discovery: `if self.config.dry_run { self.run_dry(); return Ok(()); }`. Implement `run_dry(&self)` as a simple loop that drains `command_rx.recv()` and logs each command at trace level until the channel closes. This allows full dry-run testing (input decoding, clock engine, state machine, phase correction) on any machine without MIDI hardware.",
+      "acceptance_criteria": "src/output.rs: when config.dry_run is true, no MidiOutput or port enumeration occurs; commands are logged at trace level; channel is drained until closed; cargo test passes; running with --dry-run on a machine with no MIDI hardware exits cleanly without error",
+      "completed": false,
+      "priority": 4
+    },
+    {
+      "id": "FIX-07",
+      "epic": "Core",
+      "title": "fix_coasting_warning_spam",
+      "owner": "ralph",
+      "description": "Fix log spam in src/clock.rs. The coasting warning at the BPM timeout check fires every loop iteration once the 3-second timeout is exceeded. At 120 BPM the clock loop runs ~50 iterations/second, so this produces ~50 warning lines per second in the journal. Fix: add a `last_coast_warn: Option<Instant>` field to ClockEngine (initialised to None). In the coasting check block, only emit the warning if `last_coast_warn` is None or `last_coast_warn.unwrap().elapsed() >= WATCHDOG_INTERVAL`. After emitting, set `self.last_coast_warn = Some(Instant::now())`. Reset `last_coast_warn` to None when a fresh BpmUpdate is received (in the BpmUpdate handler, add `self.last_coast_warn = None;`). Also remove the dead `select!` watchdog block at the end of the main loop (clock.rs approx line 108-111): `select! { recv(watchdog) -> _ => {}, default(Duration::from_millis(0)) => {}, }`. This block always takes the default branch and never drains the watchdog channel — it is a no-op and can be deleted along with the `let watchdog = tick(WATCHDOG_INTERVAL);` line and the `tick` import from crossbeam_channel if no longer used.",
+      "acceptance_criteria": "Coasting warning emitted at most once per WATCHDOG_INTERVAL (2 seconds) while coasting; warning resets when fresh BpmUpdate arrives; dead select! block and watchdog tick channel removed; cargo check passes; cargo clippy no warnings; cargo test passes",
+      "completed": false,
+      "priority": 4
+    },
+    {
+      "id": "FIX-08",
+      "epic": "Polish",
+      "title": "fix_status_socket_empty_response",
+      "owner": "ralph",
+      "description": "Fix silent empty response from status socket in src/main.rs `run_status_server`. Current code uses `status.try_lock()` which silently writes nothing and closes the connection if the lock is contended, causing `--status` to print an empty string with no error. Fix: replace `try_lock()` with `lock().unwrap()` — the lock is only held briefly to clone or serialise the status struct, so contention is negligible and a blocking lock is safe here. If for some reason a non-blocking approach is required, fall back to writing an explicit error JSON: `{\"error\": \"status temporarily unavailable\"}` so the client always gets a parseable response.",
+      "acceptance_criteria": "src/main.rs `run_status_server`: uses `lock()` instead of `try_lock()`; `--status` always produces a non-empty JSON response when the daemon is running; cargo check passes",
+      "completed": false,
+      "priority": 4
+    },
+    {
+      "id": "FIX-09",
+      "epic": "Foundation",
+      "title": "fix_port_arg_docstring",
+      "owner": "ralph",
+      "description": "Fix misleading CLI argument documentation in src/config.rs. The `--input-port` and `--output-port` arguments currently say \"Substring or index of ALSA MIDI port\" but only substring matching is implemented — passing a numeric index like `0` or `2` will not work. Fix: update the doc strings for both arguments to say \"Case-insensitive substring of ALSA MIDI port name (e.g. 'Circuit Rhythm' or 'mixxx_midi_clock'). Use --list-ports to see available ports.\" Do not implement numeric index parsing — just fix the documentation.",
+      "acceptance_criteria": "src/config.rs: --input-port and --output-port help text says 'Case-insensitive substring' and does not mention index; `mixxx-midi-clock --help` output reflects the correction; cargo check passes",
+      "completed": false,
+      "priority": 5
+    },
+    {
+      "id": "FIX-10",
+      "epic": "Core",
+      "title": "add_clock_engine_unit_tests",
+      "owner": "ralph",
+      "description": "Add unit tests for the clock engine's phase correction logic in src/clock.rs. The phase correction algorithm is the highest-risk part of the implementation and currently has no tests. Add a `#[cfg(test)]` module to src/clock.rs with the following tests: (1) `phase_error_wraps_correctly_at_boundary`: given beat_distance=0.99 at one moment and 0.01 the next (a boundary crossing), the computed phase_error should be small (< 0.05), not ~0.98. Verify that the modular arithmetic `((adjusted - expected + 0.5) % 1.0) - 0.5` returns a value in [-0.5, 0.5]. (2) `correction_capped_at_min_of_5pct_beat_and_tick_interval`: at 120 BPM (beat=500ms, tick=20.8ms), max correction should be 20.8ms - 1ns, not 25ms. (3) `zero_phase_error_produces_zero_correction`: phase_error=0.0 with any gain produces correction=0. (4) `negative_phase_error_increases_next_tick_deadline`: a negative phase_error (daemon is ahead of Mixxx) should add to next_tick (slow down). (5) `positive_phase_error_decreases_next_tick_deadline`: a positive phase_error (daemon is behind) should subtract from next_tick (speed up). Extract the pure phase correction math into a testable free function `compute_phase_correction(phase_error: f64, beat_duration_ns: f64, tick_interval_ns: u64, gain: f64) -> i64` that returns the correction in nanoseconds (positive = slow down, negative = speed up) so it can be unit-tested without spinning up threads.",
+      "acceptance_criteria": "src/clock.rs has `compute_phase_correction` free function and all 5 unit tests listed above; tests pass with `cargo test`; function is used by `apply_phase_correction`; cargo clippy no warnings",
+      "completed": false,
+      "priority": 5
     }
   ]
 }

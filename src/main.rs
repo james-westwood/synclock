@@ -77,7 +77,7 @@ fn main() -> Result<()> {
     });
 
     // Spawn threads
-    let input_handle = MixxxMidiInput::new(config.clone(), input_tx).spawn();
+    let input_handle = MixxxMidiInput::new(config.clone(), input_tx, running.clone()).spawn();
     let output_handle = CircuitRhythmOutput::new(config.clone(), output_rx).spawn();
 
     let clock_engine = ClockEngine::new(
@@ -171,11 +171,11 @@ fn run_status_server(socket_path: &PathBuf, status: Arc<Mutex<DaemonStatus>>) ->
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                if let Ok(st) = status.try_lock() {
-                    let json = serde_json::to_string_pretty(&*st).unwrap_or_default();
-                    let _ = stream.write_all(json.as_bytes());
-                    let _ = stream.write_all(b"\n");
-                }
+                let st = status.lock().unwrap();
+                let json = serde_json::to_string_pretty(&*st).unwrap_or_default();
+                let _ = stream.write_all(json.as_bytes());
+                let _ = stream.write_all(b"\n");
+                drop(st);
                 // Close stream so client gets EOF
                 drop(stream);
             }
