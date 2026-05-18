@@ -21,6 +21,10 @@ impl CircuitRhythmOutput {
     }
 
     fn run(&self) -> Result<()> {
+        if self.config.dry_run {
+            return self.run_dry();
+        }
+
         let midi_out =
             MidiOutput::new("mixxx-midi-clock-output").context("Failed to create MidiOutput")?;
 
@@ -72,6 +76,15 @@ impl CircuitRhythmOutput {
         }
 
         info!("Output thread shutting down");
+        Ok(())
+    }
+
+    fn run_dry(&self) -> Result<()> {
+        trace!("[dry-run] Output thread active — logging commands only");
+        while let Ok(cmd) = self.command_rx.recv() {
+            trace!("[dry-run] Would send: {:?}", cmd);
+        }
+        trace!("[dry-run] Output thread shutting down (channel closed)");
         Ok(())
     }
 }

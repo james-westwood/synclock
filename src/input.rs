@@ -3,6 +3,7 @@ use crate::state::InputEvent;
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
 use midir::{Ignore, MidiInput};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,11 +12,16 @@ use tracing::{trace, warn};
 pub struct MixxxMidiInput {
     config: Config,
     event_tx: Sender<InputEvent>,
+    running: Arc<AtomicBool>,
 }
 
 impl MixxxMidiInput {
-    pub fn new(config: Config, event_tx: Sender<InputEvent>) -> Self {
-        Self { config, event_tx }
+    pub fn new(config: Config, event_tx: Sender<InputEvent>, running: Arc<AtomicBool>) -> Self {
+        Self {
+            config,
+            event_tx,
+            running,
+        }
     }
 
     pub fn spawn(self) -> thread::JoinHandle<Result<()>> {
@@ -57,7 +63,7 @@ impl MixxxMidiInput {
             .map_err(|e| anyhow::anyhow!("Failed to connect to MIDI input port: {:?}", e))?;
 
         // Watchdog loop
-        loop {
+        while self.running.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(100));
             let last = *last_msg_time.lock().unwrap();
             if last.elapsed() > Duration::from_secs(5) {
@@ -67,6 +73,7 @@ impl MixxxMidiInput {
                 *last_msg_time.lock().unwrap() = Instant::now();
             }
         }
+        Ok(())
     }
 }
 
@@ -95,7 +102,7 @@ fn decode_events(msg: &[u8]) -> Vec<InputEvent> {
         }
         0x9A => {
             if data1 == 0x77 {
-                let beat_distance = 1.0 - (data2 as f64 / 127.0);
+                let beat_distance = data2 as f64 / 127.0;
                 trace!("Decoded Note On: beat_distance={:.4}", beat_distance);
                 vec![
                     InputEvent::BeatDistance {
@@ -155,26 +162,26 @@ mod tests {
     }
 
     #[test]
-    fn decode_note_on_returns_inverted_beat_distance() {
-        // velocity 0 => beat_distance = 1.0
+    fn decode_note_on_returns_beat_distance() {
+        // velocity 0 => beat_distance = 0.0
         let msg = vec![0x9A, 0x77, 0];
         let events = decode_events(&msg);
-        assert!(matches!(events[0], InputEvent::BeatDistance { value: 1.0 }));
+        assert!(matches!(events[0], InputEvent::BeatDistance { value: 0.0 }));
 
-        // velocity 127 => beat_distance ~0.0
+        // velocity 127 => beat_distance ~1.0
         let msg = vec![0x9A, 0x77, 127];
         let events = decode_events(&msg);
         if let InputEvent::BeatDistance { value } = events[0] {
-            assert!(value < 0.01);
+            assert!((value - 1.0).abs() < 0.01);
         } else {
             panic!("Expected BeatDistance");
         }
 
-        // velocity 64 => beat_distance ~0.496
+        // velocity 64 => beat_distance ~0.504
         let msg = vec![0x9A, 0x77, 64];
         let events = decode_events(&msg);
         if let InputEvent::BeatDistance { value } = events[0] {
-            assert!((value - 0.496).abs() < 0.01);
+            assert!((value - 0.504).abs() < 0.01);
         } else {
             panic!("Expected BeatDistance");
         }
