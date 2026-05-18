@@ -1,0 +1,19 @@
+[Unit]
+Description=Mixxx MIDI Clock Bridge (Circuit Rhythm sync)
+After=pipewire.service sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mixxx-midi-clock
+ExecStopPost=%h/.local/bin/mixxx-midi-clock --stop
+Restart=on-failure
+RestartSec=3s
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mixxx-midi-clock
+LimitRTPRIO=50
+AmbientCapabilities=CAP_SYS_NICE
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,28 @@
+[package]
+name = "mixxx-midi-clock"
+version = "0.1.0"
+edition = "2021"
+authors = ["James Westwood"]
+description = "Headless Rust daemon bridging Mixxx BPM to MIDI clock for Novation Circuit Rhythm"
+license = "MIT"
+repository = "https://github.com/jameswestwood/synclock"
+
+[dependencies]
+midir = "0.9"
+spin_sleep = "1"
+clap = { version = "=4.4.18", features = ["derive", "env"] }
+crossbeam-channel = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ctrlc = { version = "3", features = ["termination"] }
+
+[dev-dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

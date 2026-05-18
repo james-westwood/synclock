@@ -1,10 +1,12 @@
 {
   "project": "mixxx-midi-clock-rs",
-  "description": "Headless Rust daemon that bridges Mixxx BPM/beat_distance MIDI output to MIDI clock (24 PPQN) for the Novation Circuit Rhythm, running as a systemd user service.",
+  "description": "Headless Rust daemon (Linux/ALSA only) that bridges Mixxx BPM/beat_distance MIDI output to MIDI clock (24 PPQN) for the Novation Circuit Rhythm, running as a systemd user service.",
   "quality_checks": [
     "cargo check --all-targets 2>&1",
     "cargo test 2>&1",
-    "cargo clippy --all-targets -- -D warnings 2>&1"
+    "cargo clippy --all-targets -- -D warnings 2>&1",
+    "cargo fmt --check 2>&1",
+    "cargo doc --no-deps 2>&1"
   ],
   "tasks": [
     {
@@ -12,8 +14,8 @@
       "epic": "Foundation",
       "title": "scaffold_and_list_ports",
       "owner": "ralph",
-      "description": "Create the Rust project at ~/scripts/mixxx_scripts/mixxx-midi-clock-rs/ using cargo init. Cargo.toml dependencies: midir = \"0.9\", spin_sleep = \"1\", clap = { version = \"4\", features = [\"derive\", \"env\"] }, crossbeam-channel = \"0.5\", tracing = \"0.1\", tracing-subscriber = { version = \"0.3\", features = [\"env-filter\"] }, anyhow = \"1\". Create the module structure: src/main.rs (entry point, CLI, logging init), src/config.rs (Config struct, clap derive, defaults), src/input.rs (stub), src/clock.rs (stub), src/output.rs (stub), src/state.rs (PlayState, ClockState enums), src/ports.rs (stub). Implement --list-ports: enumerate all ALSA MIDI input and output ports via midir, print port names and indices, then exit. This subcommand must work without any hardware connected (just lists available ports). Implement --fallback-bpm (default 120.0), --input-port (env: MIXXX_MIDI_CLOCK_INPUT_PORT), --output-port (env: MIXXX_MIDI_CLOCK_OUTPUT_PORT), --phase-gain (default 0.15) CLI flags. Add a README.md with build instructions and --list-ports usage.",
-      "acceptance_criteria": "cargo check passes; cargo test passes (even if only dummy tests); running target with --list-ports prints MIDI port names and exits 0; running target with --help shows all CLI flags including env var defaults",
+      "description": "Create the Rust project at ~/scripts/mixxx_scripts/mixxx-midi-clock-rs/ using cargo init. Cargo.toml dependencies: midir = \"0.9\", spin_sleep = \"1\", clap = { version = \"4\", features = [\"derive\", \"env\"] }, crossbeam-channel = \"0.5\", tracing = \"0.1\", tracing-subscriber = { version = \"0.3\", features = [\"env-filter\"] }, anyhow = \"1\", libc = \"0.2\", serde = { version = \"1\", features = [\"derive\"] }, serde_json = \"1\". Create the module structure: src/main.rs (entry point, CLI, logging init), src/config.rs (Config struct, clap derive, defaults), src/input.rs (stub), src/clock.rs (stub), src/output.rs (stub), src/state.rs (PlayState, ClockState enums), src/ports.rs (stub). Implement --list-ports: enumerate all ALSA MIDI input and output ports via midir, print port names and indices, then exit. This subcommand must work without any hardware connected (just lists available ports). Implement --fallback-bpm (default 120.0), --input-port (env: MIXXX_MIDI_CLOCK_INPUT_PORT), --output-port (env: MIXXX_MIDI_CLOCK_OUTPUT_PORT), --phase-gain (default 0.15), --version, --dry-run (stub) CLI flags. Add a README.md with build instructions and --list-ports usage. Add an optimized release profile to Cargo.toml: `lto = true`, `codegen-units = 1`, `panic = \"abort\"`. Add system build dependencies note to README (\"alsa-lib-devel\" on Fedora / \"libasound2-dev\" on Debian).",
+      "acceptance_criteria": "cargo check passes; cargo test passes (even if only dummy tests); running target with --list-ports prints MIDI port names and exits 0; running target with --help shows all CLI flags including env var defaults; README lists system build dependencies; release profile present in Cargo.toml",
       "completed": false,
       "priority": 1
     },
@@ -22,7 +24,7 @@
       "epic": "Input",
       "title": "mixxx_midi_input_decoder",
       "owner": "ralph",
-      "description": "Implement src/input.rs: MixxxMidiInput struct that opens an ALSA MIDI input port (by substring match or index via --input-port) and decodes the Mixxx controller protocol on channel 11 (index 10). The decoder must handle three MIDI message types based on status byte: (1) Pitch Bend 0xEA: data1 = bpmWhole (actual BPM = data1 + 60), data2 = bpmFractional (BPM fraction = data2 / 100.0), yielding bpm = (data1 + 60.0) + (data2 as f64 / 100.0). Clamp BPM to [30.0, 300.0]. (2) Note On 0x9A on note 0x77: data2 = velocity representing beat_distance. IMPORTANT: the velocity encodes how far into the beat we ALREADY are, but the Arduino reference inverts it with (1 - velocity/127.0). Use the same inversion: beat_distance = 1.0 - (data2 as f64 / 127.0). This value represents the fraction of the current beat elapsed. (3) Note Off 0x8A on note 0x77: indicates Mixxx stopped or no sync leader — emit a Stopped event. Send decoded events through a crossbeam_channel::Sender<InputEvent> where InputEvent is an enum in src/state.rs with variants: BpmUpdate { bpm: f64 }, BeatDistance { value: f64 }, Playing, Stopped. The input thread should log each decoded message at trace level. Implement input watchdog: if no message received for 5 seconds, log a warning and emit Stopped (allows clock to coast at last BPM).",
+      "description": "Implement src/input.rs: MixxxMidiInput struct that opens an ALSA MIDI input port (by substring match or index via --input-port) and decodes the Mixxx controller protocol on channel 11 (index 10). The decoder must handle three MIDI message types based on status byte: (1) Pitch Bend 0xEA: data1 = bpmWhole (actual BPM = data1 + 60), data2 = bpmFractional (BPM fraction = data2 / 100.0), yielding bpm = (data1 + 60.0) + (data2 as f64 / 100.0). Clamp BPM to [30.0, 300.0]. (2) Note On 0x9A on note 0x77: data2 = velocity representing beat_distance. IMPORTANT: the velocity encodes how far into the beat we ALREADY are, but the Arduino reference inverts it with (1 - velocity/127.0). Use the same inversion: beat_distance = 1.0 - (data2 as f64 / 127.0). This value represents the fraction of the current beat elapsed. (3) Note Off 0x8A on note 0x77: indicates Mixxx stopped or no sync leader — emit a Stopped event. When resuming from Stopped (i.e., any Note On 0x9A or Pitch Bend 0xEA after a Stopped state or watchdog silence), also emit `InputEvent::Playing` to wake the state machine. Send decoded events through a crossbeam_channel::Sender<InputEvent> where InputEvent is an enum in src/state.rs with variants: BpmUpdate { bpm: f64 }, BeatDistance { value: f64 }, Playing, Stopped. The input thread should log each decoded message at trace level. Implement input watchdog: if no message received for 5 seconds, log a warning and emit Stopped (allows clock to coast at last BPM).",
       "acceptance_criteria": "Unit tests in src/input.rs: decode_pitch_bend_message_returns_correct_bpm; decode_pitch_bend_clamps_to_30_300; decode_note_on_returns_inverted_beat_distance (velocity 0 → beat_distance 1.0, velocity 127 → beat_distance ~0.0, velocity 64 → beat_distance ~0.496); decode_note_off_returns_stopped_event; watchdog_emits_stopped_after_5s_timeout; cargo test passes",
       "completed": false,
       "priority": 2
@@ -32,8 +34,8 @@
       "epic": "Core",
       "title": "fixed_bpm_clock_loop",
       "owner": "ralph",
-      "description": "Implement src/clock.rs: ClockEngine struct that runs a high-precision 24 PPQN clock loop on a dedicated thread. The loop: (1) Compute tick interval: tick_interval_ns = (60_000_000_000 / (bpm * 24.0)) as u64. (2) Use spin_sleep::sleep(ns) to wait between pulses — this uses busy-wait for the final ~100µs for precision. (3) On each tick, send an OutputCommand::ClockPulse through a crossbeam_channel. (4) Track pulse_count (1..=24, wraps at 24). (5) On pulse_count == 24 (beat boundary), check for phase correction input from the input thread. ClockEngine receives InputEvent via a crossbeam_channel::Receiver and updates internal BPM. For now (fixed BPM), use the --fallback-bpm value as the constant tempo. The clock thread should set real-time priority where possible: try libc::sched_setscheduler with SCHED_FIFO, fall back gracefully if not available (log warning). Add a --dry-run flag to Config: in dry-run mode, the clock thread logs each pulse at trace level but does NOT send output commands. This is critical for development without hardware.",
-      "acceptance_criteria": "Unit tests: tick_interval_ns computes correctly for 120 BPM (20_833_333ns), 160 BPM (15_625_000ns), 60 BPM (41_666_666ns); pulse_count wraps from 24 to 1; dry_run_mode_logs_pulses_without_sending; cargo test passes; cargo clippy no warnings",
+      "description": "Implement src/clock.rs: ClockEngine struct that runs a high-precision 24 PPQN clock loop on a dedicated thread. Use `std::time::Instant` for all deadline calculations to ensure monotonic timing. The loop: (1) Compute tick interval: tick_interval_ns = (60_000_000_000 / (bpm * 24.0)) as u64. (2) Use spin_sleep::sleep(ns) to wait between pulses — this uses busy-wait for the final ~100µs for precision. (3) On each tick, send an OutputCommand::ClockPulse through a crossbeam_channel. Use bounded channels (bounded(1024)) instead of unbounded to prevent memory growth if output blocks. (4) Track pulse_count (1..=24, wraps at 24). (5) On pulse_count == 24 (beat boundary), check for phase correction input from the input thread. ClockEngine receives InputEvent via a crossbeam_channel::Receiver and updates internal BPM. For now (fixed BPM), use the --fallback-bpm value as the constant tempo. The clock thread should set real-time priority where possible: try libc::sched_setscheduler with SCHED_FIFO, fall back gracefully if not available (log warning). Add a --dry-run flag to Config: in dry-run mode, the clock thread logs each pulse at trace level but does NOT send output commands. This is critical for development without hardware.",
+      "acceptance_criteria": "Unit tests: tick_interval_ns computes correctly for 120 BPM (20_833_333ns), 160 BPM (15_625_000ns), 60 BPM (41_666_666ns); pulse_count wraps from 24 to 1; dry_run_mode_logs_pulses_without_sending; monotonic Instant used for timing; channel is bounded; cargo test passes; cargo clippy no warnings",
       "completed": false,
       "priority": 2
     },
@@ -52,7 +54,7 @@
       "epic": "Core",
       "title": "play_stop_state_machine",
       "owner": "ralph",
-      "description": "Implement the state machine in src/state.rs with states: Idle, WaitingForBeat, Running, Stopped. Transitions: Idle → WaitingForBeat (on InputEvent::Playing with a valid BpmUpdate), WaitingForBeat → Running (on beat boundary after initial phase sleep — see TASK-07), Running → Stopped (on InputEvent::Stopped), Stopped → WaitingForBeat (on next InputEvent::Playing). In Running state, send OutputCommand::ClockPulse on every tick. In Stopped state, send OutputCommand::Stop. On transition from Stopped/Idle → WaitingForBeat, ALWAYS send OutputCommand::Start (0xFA), never Continue (0xFB). This matches the plan's intent since Mixxx doesn't have its own pause/resume concept — when Mixxx starts playing, Circuit Rhythm should always start from beat 1. On transition to Stopped, send OutputCommand::Stop (0xFC). Add the state machine to the ClockEngine thread: it processes InputEvent messages between clock ticks (non-blocking try_recv) and updates PlayState accordingly.",
+      "description": "Implement the state machine in src/state.rs with states: Idle, WaitingForBeat, Running, Stopped. Transitions: Idle → WaitingForBeat (on InputEvent::Playing with a valid BpmUpdate), WaitingForBeat → Running (on beat boundary after initial phase sleep — see TASK-06), Running → Stopped (on InputEvent::Stopped), Stopped → WaitingForBeat (on next InputEvent::Playing). In Running state, send OutputCommand::ClockPulse on every tick. In Stopped state, send OutputCommand::Stop. On transition from Stopped/Idle → WaitingForBeat, ALWAYS send OutputCommand::Start (0xFA), never Continue (0xFB). This matches the plan's intent since Mixxx doesn't have its own pause/resume concept — when Mixxx starts playing, Circuit Rhythm should always start from beat 1. On transition to Stopped, send OutputCommand::Stop (0xFC). Transport commands are only sent on actual state transitions, not on duplicate events while already in the target state. Add the state machine to the ClockEngine thread: it processes InputEvent messages between clock ticks (non-blocking try_recv) and updates PlayState accordingly.",
       "acceptance_criteria": "Unit tests: idle_receives_playing_transitions_to_waiting; waiting_receives_beat_transitions_to_running_sends_start; running_receives_stopped_transitions_to_stopped_sends_stop; stopped_receives_playing_transitions_to_waiting_sends_start_not_continue; state_machine_never_sends_continue_0xFB; cargo test passes",
       "completed": false,
       "priority": 3
@@ -72,8 +74,7 @@
       "epic": "Core",
       "title": "phase_correction_drift",
       "owner": "ralph",
-      "owner": "ralph",
-      "description": "Implement continuous phase correction in src/clock.rs: on every 24th pulse (beat boundary, pulse_count == 24), apply phase correction using the latest beat_distance from Mixxx. Algorithm: (1) Compute staleness: time_since_last_mixxx_msg / beat_duration_ns. (2) Adjusted beat distance: (beat_distance + staleness) % 1.0. (3) Phase error: ((adjusted_beat_distance - expected_beat_distance) + 0.5) % 1.0 - 0.5 — this wraps correctly for circular phase. (4) Correction: phase_error × beat_duration_ns × gain (configurable, default 0.15), capped at 5% of beat_duration_ns. (5) Nudge next_tick deadline by correction — never hard-jump. CRITICAL: The phase error MUST use modular arithmetic clamped to [-0.5, 0.5] to prevent violent overshoot when beat_distance wraps from ~1.0 to ~0.0. This is the highest-risk implementation detail. The correction is added to the next tick deadline (shifted forward if phase is ahead, backward if behind). Log phase corrections at debug level (error value, correction nanoseconds).",
+      "description": "Implement continuous phase correction in src/clock.rs: on every 24th pulse (beat boundary, pulse_count == 24), apply phase correction using the latest beat_distance from Mixxx. Algorithm: (1) Compute staleness: time_since_last_mixxx_msg / beat_duration_ns. (2) Adjusted beat distance: (beat_distance + staleness) % 1.0. (3) Phase error: ((adjusted_beat_distance - expected_beat_distance) + 0.5) % 1.0 - 0.5 — this wraps correctly for circular phase. At the beat boundary (pulse_count == 24), expected_beat_distance = 0.0. Correction sign convention: positive error (behind Mixxx) subtracts correction from the next tick interval to speed up; negative error (ahead) adds to interval to slow down. (4) Correction: phase_error × beat_duration_ns × gain (configurable, default 0.15), capped at 5% of beat_duration_ns. (5) Nudge next_tick deadline by correction — never hard-jump. CRITICAL: The phase error MUST use modular arithmetic clamped to [-0.5, 0.5] to prevent violent overshoot when beat_distance wraps from ~1.0 to ~0.0. This is the highest-risk implementation detail. The correction is added to the next tick deadline (shifted forward if phase is ahead, backward if behind). Log phase corrections at debug level (error value, correction nanoseconds).",
       "acceptance_criteria": "Unit tests: phase_error_wraps_correctly_at_boundary (beat_distance 0.99 → 0.01 should give small error, not ~1.0); correction_capped_at_5_percent_of_beat_duration; staleness_adjusted_beat_distance_computed_correctly; zero_phase_error_produces_zero_correction; gain_of_0_15_produces_15_percent_of_error_as_correction; negative_phase_error_delays_next_tick; cargo test passes",
       "completed": false,
       "priority": 4
@@ -83,7 +84,7 @@
       "epic": "Output",
       "title": "circuit_rhythm_output",
       "owner": "ralph",
-      "description": "Implement src/output.rs: CircuitRhythmOutput struct that opens an ALSA MIDI output port (by substring match or index via --output-port) and sends MIDI clock and transport messages. Handle OutputCommand enum: ClockPulse (send 0xF8), Start (send 0xFA), Stop (send 0xFC), Continue (send 0xFB). Run on a dedicated thread receiving from crossbeam_channel::Receiver<OutputCommand>. Auto-discovery: search for ports containing 'Focusrite-Novation' or 'Circuit Rhythm' in the name. If auto-discovery fails, log available ports and suggest --output-port flag. Send MIDI bytes directly via midir::MidiOutputConnection::send. Log each transport message (Start/Stop/Continue) at info level; log clock pulses only at trace level. In --dry-run mode, log all output commands but do NOT actually send MIDI bytes.",
+      "description": "Implement src/output.rs: CircuitRhythmOutput struct that opens an ALSA MIDI output port (by substring match or index via --output-port) and sends MIDI clock and transport messages. Handle OutputCommand enum: ClockPulse (send 0xF8), Start (send 0xFA), Stop (send 0xFC), Continue (send 0xFB). Note: Continue (0xFB) is defined for completeness but intentionally never sent per state machine rules (TASK-05). Run on a dedicated thread receiving from crossbeam_channel::Receiver<OutputCommand>. Auto-discovery: search for ports containing 'Focusrite-Novation' or 'Circuit Rhythm' in the name. If auto-discovery fails, log available ports and suggest --output-port flag. Send MIDI bytes directly via midir::MidiOutputConnection::send. Log each transport message (Start/Stop/Continue) at info level; log clock pulses only at trace level. In --dry-run mode, log all output commands but do NOT actually send MIDI bytes.",
       "acceptance_criteria": "Unit tests: clock_pulse_sends_0xF8; start_sends_0xFA; stop_sends_0xFC; continue_sends_0xFB; auto_discovery_matches_circuit_rhythm_port; dry_run_logs_without_sending; cargo test passes",
       "completed": false,
       "priority": 3
@@ -103,7 +104,7 @@
       "epic": "Integration",
       "title": "systemd_service_and_install",
       "owner": "ralph",
-      "description": "Create systemd/ directory with mixxx-midi-clock.service user unit file. Configuration: Type=simple, ExecStart=%h/.local/bin/mixxx-midi-clock, After=pipewire.service sound.target, Restart=on-failure, RestartSec=3s, Environment=RUST_LOG=info, StandardOutput=journal, StandardError=journal, SyslogIdentifier=mixxx-midi-clock, LimitRTPRIO=50, AmbientCapabilities=CAP_SYS_NICE. Add an ExecStopPost that runs the binary with --stop flag (send 0xFC on shutdown). Create install.sh script that: (1) runs cargo build --release, (2) copies binary to ~/.local/bin/mixxx-midi-clock, (3) copies systemd unit to ~/.config/systemd/user/, (4) runs systemctl --user daemon-reload, (5) runs systemctl --user enable --now mixxx-midi-clock. Add a --stop CLI flag that connects to the output port, sends 0xFC, and exits (for graceful shutdown). Log instructions for monitoring: journalctl --user -u mixxx-midi-clock -f.",
+      "description": "Create systemd/ directory with mixxx-midi-clock.service user unit file. Configuration: Type=simple, ExecStart=%h/.local/bin/mixxx-midi-clock, After=pipewire.service sound.target, Restart=on-failure, RestartSec=3s, Environment=RUST_LOG=info, StandardOutput=journal, StandardError=journal, SyslogIdentifier=mixxx-midi-clock, LimitRTPRIO=50, AmbientCapabilities=CAP_SYS_NICE. Implement graceful shutdown on SIGINT/SIGTERM using the `ctrlc` crate: signal threads to exit and ensure OutputCommand::Stop (0xFC) is sent before termination. Add an ExecStopPost that runs the binary with --stop flag (send 0xFC on shutdown). Create install.sh script that: (1) runs cargo build --release, (2) copies binary to ~/.local/bin/mixxx-midi-clock, (3) copies systemd unit to ~/.config/systemd/user/, (4) runs systemctl --user daemon-reload, (5) runs systemctl --user enable --now mixxx-midi-clock. Add a --stop CLI flag that connects to the output port, sends 0xFC, and exits (for graceful shutdown). Log instructions for monitoring: journalctl --user -u mixxx-midi-clock -f.",
       "acceptance_criteria": "systemd unit file has correct ExecStart, ExecStopPost, and capabilities; install.sh builds release binary and installs to ~/.local/bin; install.sh enables and starts the service; --stop flag sends 0xFC and exits; systemctl --user status shows active after install; cargo test passes",
       "completed": false,
       "priority": 6
@@ -137,6 +138,106 @@
       "acceptance_criteria": "All 9 acceptance criteria from the plan verified on real hardware; results documented",
       "completed": false,
       "priority": 8
+    },
+    {
+      "id": "FIX-01",
+      "epic": "Input",
+      "title": "fix_beat_distance_inversion",
+      "owner": "ralph",
+      "description": "Fix beat distance decoding in src/input.rs:98. The current code incorrectly inverts the value: `let beat_distance = 1.0 - (data2 as f64 / 127.0);`. The Mixxx JS script sends `Math.round(beatDistance * 127)` as velocity, where beatDistance is Mixxx's beat_distance control (0.0 = on the beat, 1.0 = just before the next beat). The correct decode is `let beat_distance = data2 as f64 / 127.0;` — no inversion. With the current inversion, initial phase sync sleeps for the wrong duration: when Mixxx is at beat_distance=0.0 (just hit the beat), the daemon starts immediately instead of waiting a full beat, and vice versa. Also update the test `decode_note_on_returns_inverted_beat_distance` in src/input.rs to reflect the correct (non-inverted) semantics: rename it `decode_note_on_returns_beat_distance` and update assertions: velocity 0 → beat_distance 0.0, velocity 127 → beat_distance ~1.0, velocity 64 → beat_distance ~0.504. Note: TASK-02's original description incorrectly specified the inversion — this fix overrides that instruction.",
+      "acceptance_criteria": "src/input.rs: beat_distance decoding uses `data2 as f64 / 127.0` with no inversion; test `decode_note_on_returns_beat_distance` asserts velocity 0 → 0.0, velocity 127 → ~1.0, velocity 64 → ~0.504; cargo test passes; cargo clippy no warnings",
+      "completed": true,
+      "priority": 2
+    },
+    {
+      "id": "FIX-02",
+      "epic": "Core",
+      "title": "fix_start_before_phase_sync",
+      "owner": "ralph",
+      "description": "Fix ordering of OutputCommand::Start and initial_phase_sync in src/clock.rs `transition_to_waiting`. Current code (wrong order): `self.send_output(OutputCommand::Start); self.initial_phase_sync(); self.transition_to_running();`. This sends 0xFA immediately, then sleeps up to ~500ms before the first 0xF8 arrives. The Circuit Rhythm starts its sequencer on 0xFA and counts time with no clock pulses for up to 500ms, then receives a burst — this defeats the purpose of phase sync. Correct order: `self.initial_phase_sync(); self.send_output(OutputCommand::Start); self.transition_to_running();`. This way 0xFA and the first 0xF8 arrive in tight sequence (within one tick interval, ~20ms at 120 BPM). No other changes needed.",
+      "acceptance_criteria": "src/clock.rs `transition_to_waiting`: `initial_phase_sync()` is called before `send_output(OutputCommand::Start)`; cargo test passes; cargo check passes",
+      "completed": true,
+      "priority": 2
+    },
+    {
+      "id": "FIX-03",
+      "epic": "Integration",
+      "title": "fix_ctrlc_sigterm",
+      "owner": "ralph",
+      "description": "Fix Cargo.toml so that ctrlc catches SIGTERM in addition to SIGINT. Current: `ctrlc = \"3\"`. Without the `termination` feature, ctrlc only catches SIGINT on Linux, not SIGTERM. Systemd sends SIGTERM on `systemctl stop`, so the daemon hangs until TimeoutStopSec expires and the graceful 0xFC Stop is never sent to the Circuit Rhythm. Fix: change to `ctrlc = { version = \"3\", features = [\"termination\"] }` in Cargo.toml. No other changes needed.",
+      "acceptance_criteria": "Cargo.toml has `ctrlc = { version = \"3\", features = [\"termination\"] }`; cargo check passes; cargo test passes",
+      "completed": true,
+      "priority": 3
+    },
+    {
+      "id": "FIX-04",
+      "epic": "Integration",
+      "title": "fix_thread_shutdown_propagation",
+      "owner": "ralph",
+      "description": "Fix graceful shutdown: the `running` Arc<AtomicBool> is currently only observed by ClockEngine. The input thread (MixxxMidiInput::run in src/input.rs) runs an infinite watchdog loop and never checks `running`, so main() hangs on its join. The output thread (CircuitRhythmOutput::run in src/output.rs) blocks on `command_rx.recv()` indefinitely after the clock engine exits, so its join also hangs. Fix both: (1) In src/input.rs: add `running: Arc<AtomicBool>` field to MixxxMidiInput, pass it through `new()` and `spawn()`. In the watchdog loop, replace `loop {` with `while self.running.load(Ordering::Relaxed) {`. Update MixxxMidiInput::new call in src/main.rs to pass `running.clone()`. (2) In src/output.rs: the output thread blocks on `command_rx.recv()`. When the clock engine shuts down it drops `output_tx`, which closes the channel — `recv()` will then return `Err(Disconnected)` and the loop exits naturally via `while let Ok(cmd) = self.command_rx.recv()`. No change needed to output.rs if it already uses `while let Ok`. Verify output.rs loop exits cleanly when channel is closed. (3) In src/main.rs: verify that after `running.store(false)` in the ctrlc handler, the clock engine thread exits and drops `output_tx`, which unblocks the output thread. The input thread will exit on the next watchdog iteration (within 100ms). No join timeout is needed if the above is correct.",
+      "acceptance_criteria": "MixxxMidiInput accepts `running: Arc<AtomicBool>` and exits its loop when running is false; output thread exits when output_tx is dropped (channel closes); main() does not hang after SIGINT; cargo check passes; cargo test passes",
+      "completed": true,
+      "priority": 3
+    },
+    {
+      "id": "FIX-05",
+      "epic": "Core",
+      "title": "fix_phase_correction_pulse_doubling",
+      "owner": "ralph",
+      "description": "Fix phase correction in src/clock.rs `apply_phase_correction` to prevent back-to-back 0xF8 pulses. Current code caps correction at 5% of beat_duration_ns. At 120 BPM: beat_duration = 500ms, 5% = 25ms. But one tick interval = 20.8ms. So a 25ms correction can push `next_tick` more than one tick into the past, causing the next `run_clock_tick` to fire immediately (no sleep) AND the tick after that to also fire immediately — two pulses in rapid succession. Fix: additionally cap the correction so it cannot push `next_tick` past `Instant::now()`. After computing `capped_correction`, before applying it to `next_tick`, check: if the resulting `next_tick` would be in the past, clamp it to `Instant::now() + Duration::from_nanos(1)`. Alternatively, cap correction to `min(5% of beat, tick_interval_ns - 1)`. The second approach is cleaner. Change the max_correction calculation to: `let max_correction = (beat_duration_ns * 0.05).min(self.tick_interval_ns as f64 - 1.0);`",
+      "acceptance_criteria": "src/clock.rs `apply_phase_correction`: max_correction is capped to the minimum of 5% of beat_duration and (tick_interval_ns - 1); unit test `correction_cannot_push_next_tick_into_past` verifies that after correction, next_tick is always >= Instant::now(); cargo test passes",
+      "completed": true,
+      "priority": 3
+    },
+    {
+      "id": "FIX-06",
+      "epic": "Output",
+      "title": "fix_dry_run_port_connection",
+      "owner": "ralph",
+      "description": "Fix --dry-run mode in src/output.rs. Currently the output thread performs full MIDI port discovery and attempts to connect even in dry-run mode, making it unusable on machines without the Circuit Rhythm connected. Fix: in `CircuitRhythmOutput::run()`, add an early return path before port discovery: `if self.config.dry_run { self.run_dry(); return Ok(()); }`. Implement `run_dry(&self)` as a simple loop that drains `command_rx.recv()` and logs each command at trace level until the channel closes. This allows full dry-run testing (input decoding, clock engine, state machine, phase correction) on any machine without MIDI hardware.",
+      "acceptance_criteria": "src/output.rs: when config.dry_run is true, no MidiOutput or port enumeration occurs; commands are logged at trace level; channel is drained until closed; cargo test passes; running with --dry-run on a machine with no MIDI hardware exits cleanly without error",
+      "completed": true,
+      "priority": 4
+    },
+    {
+      "id": "FIX-07",
+      "epic": "Core",
+      "title": "fix_coasting_warning_spam",
+      "owner": "ralph",
+      "description": "Fix log spam in src/clock.rs. The coasting warning at the BPM timeout check fires every loop iteration once the 3-second timeout is exceeded. At 120 BPM the clock loop runs ~50 iterations/second, so this produces ~50 warning lines per second in the journal. Fix: add a `last_coast_warn: Option<Instant>` field to ClockEngine (initialised to None). In the coasting check block, only emit the warning if `last_coast_warn` is None or `last_coast_warn.unwrap().elapsed() >= WATCHDOG_INTERVAL`. After emitting, set `self.last_coast_warn = Some(Instant::now())`. Reset `last_coast_warn` to None when a fresh BpmUpdate is received (in the BpmUpdate handler, add `self.last_coast_warn = None;`). Also remove the dead `select!` watchdog block at the end of the main loop (clock.rs approx line 108-111): `select! { recv(watchdog) -> _ => {}, default(Duration::from_millis(0)) => {}, }`. This block always takes the default branch and never drains the watchdog channel — it is a no-op and can be deleted along with the `let watchdog = tick(WATCHDOG_INTERVAL);` line and the `tick` import from crossbeam_channel if no longer used.",
+      "acceptance_criteria": "Coasting warning emitted at most once per WATCHDOG_INTERVAL (2 seconds) while coasting; warning resets when fresh BpmUpdate arrives; dead select! block and watchdog tick channel removed; cargo check passes; cargo clippy no warnings; cargo test passes",
+      "completed": true,
+      "priority": 4
+    },
+    {
+      "id": "FIX-08",
+      "epic": "Polish",
+      "title": "fix_status_socket_empty_response",
+      "owner": "ralph",
+      "description": "Fix silent empty response from status socket in src/main.rs `run_status_server`. Current code uses `status.try_lock()` which silently writes nothing and closes the connection if the lock is contended, causing `--status` to print an empty string with no error. Fix: replace `try_lock()` with `lock().unwrap()` — the lock is only held briefly to clone or serialise the status struct, so contention is negligible and a blocking lock is safe here. If for some reason a non-blocking approach is required, fall back to writing an explicit error JSON: `{\"error\": \"status temporarily unavailable\"}` so the client always gets a parseable response.",
+      "acceptance_criteria": "src/main.rs `run_status_server`: uses `lock()` instead of `try_lock()`; `--status` always produces a non-empty JSON response when the daemon is running; cargo check passes",
+      "completed": true,
+      "priority": 4
+    },
+    {
+      "id": "FIX-09",
+      "epic": "Foundation",
+      "title": "fix_port_arg_docstring",
+      "owner": "ralph",
+      "description": "Fix misleading CLI argument documentation in src/config.rs. The `--input-port` and `--output-port` arguments currently say \"Substring or index of ALSA MIDI port\" but only substring matching is implemented — passing a numeric index like `0` or `2` will not work. Fix: update the doc strings for both arguments to say \"Case-insensitive substring of ALSA MIDI port name (e.g. 'Circuit Rhythm' or 'mixxx_midi_clock'). Use --list-ports to see available ports.\" Do not implement numeric index parsing — just fix the documentation.",
+      "acceptance_criteria": "src/config.rs: --input-port and --output-port help text says 'Case-insensitive substring' and does not mention index; `mixxx-midi-clock --help` output reflects the correction; cargo check passes",
+      "completed": true,
+      "priority": 5
+    },
+    {
+      "id": "FIX-10",
+      "epic": "Core",
+      "title": "add_clock_engine_unit_tests",
+      "owner": "ralph",
+      "description": "Add unit tests for the clock engine's phase correction logic in src/clock.rs. The phase correction algorithm is the highest-risk part of the implementation and currently has no tests. Add a `#[cfg(test)]` module to src/clock.rs with the following tests: (1) `phase_error_wraps_correctly_at_boundary`: given beat_distance=0.99 at one moment and 0.01 the next (a boundary crossing), the computed phase_error should be small (< 0.05), not ~0.98. Verify that the modular arithmetic `((adjusted - expected + 0.5) % 1.0) - 0.5` returns a value in [-0.5, 0.5]. (2) `correction_capped_at_min_of_5pct_beat_and_tick_interval`: at 120 BPM (beat=500ms, tick=20.8ms), max correction should be 20.8ms - 1ns, not 25ms. (3) `zero_phase_error_produces_zero_correction`: phase_error=0.0 with any gain produces correction=0. (4) `negative_phase_error_increases_next_tick_deadline`: a negative phase_error (daemon is ahead of Mixxx) should add to next_tick (slow down). (5) `positive_phase_error_decreases_next_tick_deadline`: a positive phase_error (daemon is behind) should subtract from next_tick (speed up). Extract the pure phase correction math into a testable free function `compute_phase_correction(phase_error: f64, beat_duration_ns: f64, tick_interval_ns: u64, gain: f64) -> i64` that returns the correction in nanoseconds (positive = slow down, negative = speed up) so it can be unit-tested without spinning up threads.",
+      "acceptance_criteria": "src/clock.rs has `compute_phase_correction` free function and all 5 unit tests listed above; tests pass with `cargo test`; function is used by `apply_phase_correction`; cargo clippy no warnings",
+      "completed": true,
+      "priority": 5
     }
   ]
 }
