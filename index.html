@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sync[lock] — BPM sync daemon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ── Reset & tokens ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --surface2: #1c2128;
+      --border:   #21262d;
+      --border2:  #30363d;
+      --blue:     #58a6ff;
+      --bluelt:   #79c0ff;
+      --text:     #c9d1d9;
+      --muted:    #8b949e;
+      --dim:      #484f58;
+      --font:     'IBM Plex Mono', monospace;
+      --beat:     500ms;
+      --max-w:    960px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { color: var(--bluelt); }
+
+    /* ── Layout ─────────────────────────────────────── */
+    .container {
+      max-width: var(--max-w);
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Nav ────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+
+    .nav-inner {
+      max-width: var(--max-w);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 48px;
+    }
+
+    .nav-logo {
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .nav-logo span { color: var(--blue); }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      list-style: none;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+    }
+
+    .nav-links a { color: var(--muted); transition: color 0.15s; }
+    .nav-links a:hover,
+    .nav-links a.active { color: var(--text); }
+
+    .nav-cta {
+      padding: 5px 14px;
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text) !important;
+      transition: all 0.15s;
+    }
+
+    .nav-cta:hover {
+      background: var(--surface);
+      border-color: var(--blue);
+    }
+
+    /* ── Hero ───────────────────────────────────────── */
+    .hero {
+      text-align: center;
+      padding: 80px 0 64px;
+    }
+
+    .hero-logo {
+      margin-bottom: 32px;
+    }
+
+    .hero-logo svg {
+      width: 120px;
+      height: 120px;
+    }
+
+    .hero h1 {
+      font-size: 22px;
+      font-weight: 400;
+      line-height: 1.5;
+      max-width: 560px;
+      margin: 0 auto 16px;
+    }
+
+    .hero h1 strong { color: var(--bluelt); font-weight: 500; }
+
+    .hero-sub {
+      font-size: 11px;
+      color: var(--muted);
+      max-width: 480px;
+      margin: 0 auto 12px;
+      line-height: 1.7;
+    }
+
+    .strapline {
+      font-size: 12px;
+      color: var(--blue);
+      font-style: italic;
+      margin-bottom: 32px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 4px;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--blue);
+      color: var(--bg);
+    }
+
+    .btn-primary:hover { background: var(--bluelt); color: var(--bg); }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border2);
+    }
+
+    .btn-secondary:hover { border-color: var(--blue); color: var(--blue); }
+
+    /* ── Section headers ────────────────────────────── */
+    .section-label {
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── System flow ────────────────────────────────── */
+    .flow {
+      padding: 48px 0;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .flow-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      position: relative;
+    }
+
+    .flow-card.active { border-color: var(--blue); }
+
+    .flow-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .flow-tag {
+      font-size: 8px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      color: var(--muted);
+    }
+
+    .flow-card.active .flow-tag {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .flow-num {
+      font-size: 9px;
+      color: var(--dim);
+    }
+
+    .flow-icon {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .flow-card h3 {
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .flow-card p {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ── Capabilities ───────────────────────────────── */
+    .capabilities {
+      padding: 48px 0;
+    }
+
+    .cap-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .cap-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      display: flex;
+      gap: 14px;
+    }
+
+    .cap-icon {
+      font-size: 16px;
+      color: var(--blue);
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .cap-card h3 {
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    .cap-card p {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ── Ethos ──────────────────────────────────────── */
+    .ethos {
+      padding: 64px 0;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ethos-label {
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 20px;
+    }
+
+    .ethos h2 {
+      font-size: 20px;
+      font-weight: 400;
+      margin-bottom: 16px;
+    }
+
+    .ethos h2 strong { color: var(--bluelt); }
+
+    .ethos p {
+      font-size: 11px;
+      color: var(--muted);
+      max-width: 480px;
+      margin: 0 auto 32px;
+      line-height: 1.7;
+    }
+
+    .ethos-stats {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+    }
+
+    .ethos-stat {
+      text-align: center;
+    }
+
+    .ethos-stat .value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--blue);
+    }
+
+    .ethos-stat .label {
+      font-size: 9px;
+      color: var(--dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    /* ── Get started ────────────────────────────────── */
+    .get-started {
+      padding: 48px 0;
+    }
+
+    .terminal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 14px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border2);
+    }
+
+    .terminal-title {
+      font-size: 10px;
+      color: var(--dim);
+      margin-left: 8px;
+    }
+
+    .terminal-body {
+      padding: 20px;
+      font-size: 12px;
+      line-height: 2;
+    }
+
+    .terminal-body .comment {
+      color: var(--dim);
+    }
+
+    .terminal-body .cmd {
+      color: var(--text);
+    }
+
+    .terminal-body .cmd::before {
+      content: '$ ';
+      color: var(--blue);
+    }
+
+    .terminal-body .config {
+      color: var(--muted);
+      padding-left: 16px;
+      border-left: 2px solid var(--border2);
+      margin: 8px 0;
+    }
+
+    .terminal-body .config .key {
+      color: var(--bluelt);
+    }
+
+    /* ── Footer ─────────────────────────────────────── */
+    footer {
+      padding: 48px 0 32px;
+      border-top: 1px solid var(--border);
+      margin-top: 48px;
+    }
+
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .footer-brand .footer-logo {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .footer-brand .footer-logo span { color: var(--blue); }
+
+    .footer-brand .footer-strap {
+      font-size: 11px;
+      color: var(--muted);
+      font-style: italic;
+      margin-bottom: 12px;
+    }
+
+    .footer-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 9px;
+      color: var(--dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .footer-status .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #3fb950;
+      animation: dotPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes dotPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 40px;
+    }
+
+    .footer-col h4 {
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 12px;
+    }
+
+    .footer-col ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .footer-col a {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .footer-col a:hover { color: var(--text); }
+
+    .footer-bottom {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--dim);
+    }
+
+    /* ── Logo animations ────────────────────────────── */
+    @keyframes dashFlow {
+      to { stroke-dashoffset: -35; }
+    }
+
+    @keyframes spinAround {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes beatExpand {
+      0%   { transform: scale(1);    opacity: 0.65; }
+      100% { transform: scale(1.5);  opacity: 0;    }
+    }
+
+    @keyframes nodeFlash {
+      0%   { transform: scale(1.7); opacity: 1;   }
+      18%  { transform: scale(1.0); opacity: 0.5; }
+      100% { transform: scale(1.0); opacity: 0.5; }
+    }
+
+    @keyframes pathBeat {
+      0%   { stroke-opacity: 1;   }
+      10%  { stroke-opacity: 1;   }
+      35%  { stroke-opacity: 0.7; }
+      100% { stroke-opacity: 0.7; }
+    }
+
+    @keyframes c-pulse {
+      0%, 100% { color: var(--text); transform: scale(1); }
+      10%, 25% { color: var(--blue); transform: scale(1.1); }
+    }
+
+    .w-pulse {
+      display: inline-block;
+      animation: c-pulse var(--beat) ease-in-out infinite;
+    }
+
+    .a-dash  { animation: dashFlow 4s linear infinite; }
+
+    .a-spin  {
+      transform-box: view-box;
+      transform-origin: 50% 50%;
+      animation: spinAround 9s linear infinite;
+      will-change: transform;
+    }
+
+    .a-beat {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: beatExpand var(--beat) cubic-bezier(0.05, 0.8, 0.2, 1) infinite;
+    }
+
+    .a-beat2 {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: beatExpand var(--beat) cubic-bezier(0.05, 0.8, 0.2, 1) infinite;
+      animation-delay: calc(var(--beat) * 0.28);
+    }
+
+    .a-node {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: nodeFlash var(--beat) ease-out infinite;
+    }
+
+    .a-path { animation: pathBeat var(--beat) ease-out infinite; }
+
+    /* ── Responsive ─────────────────────────────────── */
+    @media (max-width: 768px) {
+      .flow-grid { grid-template-columns: 1fr; }
+      .cap-grid { grid-template-columns: 1fr; }
+      .ethos-stats { gap: 24px; }
+      .footer-inner { flex-direction: column; gap: 32px; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Nav ────────────────────────────────────────── -->
+  <nav>
+    <div class="nav-inner">
+      <div class="nav-logo">sync<span class="w-pulse">c</span>lock</div>
+      <ul class="nav-links">
+        <li><a href="#flow">How It Works</a></li>
+        <li><a href="#capabilities">Features</a></li>
+        <li><a href="#ethos" class="active">Ethos</a></li>
+        <li><a href="#docs">Docs</a></li>
+        <li><a href="https://github.com/jameswestwood/synclock" class="nav-cta">Get Started</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- ── Hero ───────────────────────────────────────── -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-logo">
+        <!-- Animated logo mark -->
+        <svg width="120" height="120" viewBox="-100 -100 200 200"
+             xmlns="http://www.w3.org/2000/svg" style="overflow:visible">
+          <defs>
+            <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="4" result="b"/>
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+            <filter id="glowsm" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="2" result="b"/>
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <circle class="a-beat" cx="0" cy="0" r="74" fill="none" stroke="var(--blue)" stroke-width="1.5"/>
+          <circle class="a-beat2" cx="0" cy="0" r="74" fill="none" stroke="var(--blue)" stroke-width="0.8"/>
+          <circle class="a-dash" cx="0" cy="0" r="86" fill="none" stroke="var(--blue)" stroke-width="1.3" stroke-dasharray="18 7 3 7" opacity="0.32"/>
+          <g class="a-spin">
+            <line x1="0" y1="-86" x2="0" y2="-97" stroke="var(--bluelt)" stroke-width="1.6" stroke-linecap="round" opacity="0.5"/>
+            <circle cx="0" cy="-86" r="3.8" fill="var(--bluelt)"/>
+          </g>
+          <circle cx="0" cy="0" r="74" fill="none" stroke="var(--blue)" stroke-width="0.5" opacity="0.1"/>
+          <path class="a-path" d="M0,0 C8,-28 52,-28 52,0 C52,28 8,28 0,0 C-8,-28 -52,-28 -52,0 C-52,28 -8,28 0,0Z" fill="none" stroke="var(--blue)" stroke-width="2.6" stroke-linejoin="round" filter="url(#glow)"/>
+          <circle cx="0" cy="0" r="5.5" fill="var(--bg)"/>
+          <circle class="a-node" cx="0" cy="0" r="3.2" fill="var(--bluelt)" filter="url(#glowsm)"/>
+          <g opacity="0.22">
+            <circle cx="-10" cy="80" r="2" fill="var(--bluelt)"/>
+            <circle cx="-5" cy="83" r="2" fill="var(--bluelt)"/>
+            <circle cx="0" cy="84" r="2" fill="var(--bluelt)"/>
+            <circle cx="5" cy="83" r="2" fill="var(--bluelt)"/>
+            <circle cx="10" cy="80" r="2" fill="var(--bluelt)"/>
+          </g>
+        </svg>
+      </div>
+      <h1>BPM sync daemon — bridge <strong>Mixxx</strong> to your hardware via USB MIDI</h1>
+      <p class="hero-sub">Low-latency synchronisation for the modern open-source DJ booth. Synchronise external sequencers, drum machines, and synth racks to your software master clock with sample-accurate precision.</p>
+      <p class="strapline">"Seize the means of synchronisation."</p>
+      <div class="hero-actions">
+        <a href="#get-started" class="btn btn-primary">↓ Get Started</a>
+        <a href="https://github.com/jameswestwood/synclock" class="btn btn-secondary">&lt;/&gt; View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── System Flow ────────────────────────────────── -->
+  <section class="flow" id="flow">
+    <div class="container">
+      <div class="section-label">System Flow</div>
+      <div class="flow-grid">
+        <div class="flow-card">
+          <div class="flow-card-header">
+            <span class="flow-tag">Source</span>
+            <span class="flow-num">01</span>
+          </div>
+          <div class="flow-icon">♪</div>
+          <h3>Mixxx Master</h3>
+          <p>Mixxx broadcasts engine state via local socket. Track BPM and beat-position are monitored in real-time.</p>
+        </div>
+        <div class="flow-card active">
+          <div class="flow-card-header">
+            <span class="flow-tag">Daemon</span>
+            <span class="flow-num">02</span>
+          </div>
+          <div class="flow-icon">⚙</div>
+          <h3>SyncLock Core</h3>
+          <p>Our Rust-based binary translates engine clock to MIDI 24PPQN signals with microsecond jitter correction.</p>
+        </div>
+        <div class="flow-card">
+          <div class="flow-card-header">
+            <span class="flow-tag">Hardware</span>
+            <span class="flow-num">03</span>
+          </div>
+          <div class="flow-icon">⊞</div>
+          <h3>MIDI Output</h3>
+          <p>Standard MIDI Start/Stop/Clock pulses are routed to your USB-MIDI interface or hardware synth.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Capabilities ───────────────────────────────── -->
+  <section class="capabilities" id="capabilities">
+    <div class="container">
+      <div class="section-label">Core Capabilities</div>
+      <div class="cap-grid">
+        <div class="cap-card">
+          <div class="cap-icon">⚡</div>
+          <div>
+            <h3>Sub-millisecond Latency</h3>
+            <p>Written in zero-cost abstraction Rust to ensure clock pulses never drift, even under high CPU load.</p>
+          </div>
+        </div>
+        <div class="cap-card">
+          <div class="cap-icon"></div>
+          <div>
+            <h3>Zero Proprietary Hubs</h3>
+            <p>Works with any standard ALSA/CoreAudio MIDI device. No expensive proprietary sync boxes required.</p>
+          </div>
+        </div>
+        <div class="cap-card">
+          <div class="cap-icon">⊘</div>
+          <div>
+            <h3>Headless Service</h3>
+            <p>Run as a background systemd service. Set it once and forget it—sync starts automatically with Mixxx.</p>
+          </div>
+        </div>
+        <div class="cap-card">
+          <div class="cap-icon">↺</div>
+          <div>
+            <h3>Phase Alignment</h3>
+            <p>Not just BPM, but beat alignment. Your drum machine stays in phase with the track on every downbeat.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Ethos ──────────────────────────────────────── -->
+  <section class="ethos" id="ethos">
+    <div class="container">
+      <div class="ethos-label">Ethos Manifesto</div>
+      <h2>Open Core. <strong>Real Speed.</strong></h2>
+      <p>We believe the bridge between software performance and hardware tactile feel should be transparent, free, and community-owned. Synclock is built by DJs who code, for performers who demand reliability over marketing hype.</p>
+      <div class="ethos-stats">
+        <div class="ethos-stat">
+          <div class="value">100%</div>
+          <div class="label">Open Source</div>
+        </div>
+        <div class="ethos-stat">
+          <div class="value">0.2ms</div>
+          <div class="label">Avg Jitter</div>
+        </div>
+        <div class="ethos-stat">
+          <div class="value">Rust</div>
+          <div class="label">Core Engine</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─ Get Started ────────────────────────────────── -->
+  <section class="get-started" id="get-started">
+    <div class="container">
+      <div class="section-label">Get Started</div>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">terminal — synclock-install</span>
+        </div>
+        <div class="terminal-body">
+          <div class="comment"># Install via cargo (Recommended)</div>
+          <div class="cmd">cargo install synclock-daemon</div>
+          <br>
+          <div class="comment"># For Arch Linux users</div>
+          <div class="cmd">yay -S synclock-bin</div>
+          <br>
+          <div class="comment"># Quick Config (synclock.toml)</div>
+          <div class="config">
+            <span class="key">[midi]</span><br>
+            device = "USB-MIDI-Interface-1"<br>
+            channel = 1<br>
+            mode = "clock+start_stop"<br>
+            <br>
+            <span class="key">[mixxx]</span><br>
+            socket = "/tmp/mixxx_engine.sock"
+          </div>
+          <br>
+          <div class="comment"># Run daemon</div>
+          <div class="cmd">synclock --config ./synclock.toml</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ─────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <div class="footer-logo">sync<span class="w-pulse">c</span>lock</div>
+          <div class="footer-strap">"Seize the means of synchronisation."</div>
+          <div class="footer-status">
+            <span class="dot"></span>
+            Global sync active
+          </div>
+        </div>
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Resources</h4>
+            <ul>
+              <li><a href="#docs">Documentation</a></li>
+              <li><a href="https://github.com/jameswestwood/synclock">GitHub Repo</a></li>
+              <li><a href="#">Changelog</a></li>
+            </ul>
+          </div>
+          <div class="footer-col">
+            <h4>Community</h4>
+            <ul>
+              <li><a href="https://mixxx.org">Mixxx Forum</a></li>
+              <li><a href="#">Discord</a></li>
+              <li><a href="#">Sponsor</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Synclock Terminal. Open Source Core.</span>
+        <span>Rust / Apache-2.0</span>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
