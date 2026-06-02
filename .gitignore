@@ -1,0 +1,10 @@
+# Brand identity (reference only)
+Logo & Icon - synclock.html
+uploads/
+.thumbnail
+
+# Handoff docs
+synclock_handoff_docs.md
+
+# Standalone logo SVG (embedded in index.html)
+logo.svg
